@@ -44,9 +44,17 @@
         const authStatus = document.getElementById('auth-status');
         const authBtn = document.getElementById('auth-btn');
         const ALLOWED_DOMAIN = '@grupotbx.com.br';
+        const ADMIN_EMAILS = new Set([
+            'wellinton.luz@grupotbx.com.br',
+            'sara.silva@grupotbx.com.br'
+        ]);
 
         function isAllowedEmail(email) {
             return typeof email === 'string' && email.toLowerCase().endsWith(ALLOWED_DOMAIN);
+        }
+
+        function isAdmin() {
+            return currentUser && ADMIN_EMAILS.has((currentUser.email || '').toLowerCase());
         }
 
         function setLoadingText(text) {
@@ -55,14 +63,19 @@
         }
 
         function setAuthUI() {
+            const novaBtn = document.getElementById('btn-nova-avaria');
             if (currentUser) {
-                authStatus.textContent = currentUser.displayName || currentUser.email || 'Usuário autenticado';
+                const role = isAdmin() ? '● Admin' : '● Visualizador';
+                const roleColor = isAdmin() ? 'text-green-600' : 'text-amber-600';
+                authStatus.innerHTML = `<span class="${roleColor} font-semibold text-xs">${role}</span> <span class="text-gray-600 text-sm">${currentUser.email}</span>`;
                 authBtn.textContent = 'Sair';
                 authBtn.className = 'bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all';
+                if (novaBtn) novaBtn.style.display = isAdmin() ? '' : 'none';
             } else {
-                authStatus.textContent = `Não autenticado (${ALLOWED_DOMAIN})`;
-                authBtn.textContent = `Entrar com Google (${ALLOWED_DOMAIN})`;
+                authStatus.innerHTML = `<span class="text-gray-500 text-sm">Acesso: ${ALLOWED_DOMAIN}</span>`;
+                authBtn.textContent = 'Entrar com Google';
                 authBtn.className = 'bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all';
+                if (novaBtn) novaBtn.style.display = 'none';
             }
         }
 
@@ -179,6 +192,7 @@
                                 </button>
                             ` : ''}
 
+                            ${isAdmin() ? `
                             <div class="flex gap-1 w-full sm:w-auto">
                                 <button onclick="window.handleStatusAction('${r.id}', '${r.status}')" class="flex-1 sm:flex-none px-3 ${r.status === 'pago' ? 'bg-gray-100 text-gray-500' : 'bg-green-600 text-white'} py-2 rounded-lg hover:opacity-90 transition-colors flex items-center justify-center">
                                     <i data-lucide="${r.status === 'pago' ? 'rotate-ccw' : 'check-circle'}" class="w-5 h-5"></i>
@@ -187,6 +201,7 @@
                                     <i data-lucide="trash-2" class="w-5 h-5"></i>
                                 </button>
                             </div>
+                            ` : ''}
                         </div>
                     </div>
                 </div>
@@ -197,8 +212,8 @@
 
         // Controle de Ações
         window.handleStatusAction = async (id, currentStatus) => {
-            if (!currentUser) {
-                alert('Faça login com Google para alterar status.');
+            if (!isAdmin()) {
+                alert('Apenas administradores podem alterar o status.');
                 return;
             }
 
@@ -222,8 +237,8 @@
         };
 
         window.deleteRecord = async (id) => {
-            if (!currentUser) {
-                alert('Faça login com Google para excluir registros.');
+            if (!isAdmin()) {
+                alert('Apenas administradores podem excluir registros.');
                 return;
             }
 
@@ -277,8 +292,8 @@
         // Submissão Avaria
         formAvaria.onsubmit = async (e) => {
             e.preventDefault();
-            if (!currentUser) {
-                alert('Faça login com Google para salvar.');
+            if (!isAdmin()) {
+                alert('Apenas administradores podem registrar avarias.');
                 return;
             }
 
@@ -320,8 +335,8 @@
         // Submissão Pagamento
         formPagamento.onsubmit = async (e) => {
             e.preventDefault();
-            if (!currentUser) {
-                alert('Faça login com Google para confirmar pagamento.');
+            if (!isAdmin()) {
+                alert('Apenas administradores podem confirmar pagamentos.');
                 return;
             }
 
@@ -359,8 +374,8 @@
 
         // Modais
         window.openModal = (type) => {
-            if (!currentUser) {
-                alert('Entre com Google antes de cadastrar.');
+            if (!isAdmin()) {
+                alert('Apenas administradores podem cadastrar.');
                 return;
             }
             document.getElementById(`modal-${type}`).classList.replace('hidden', 'flex');
@@ -430,7 +445,7 @@
             <div class="flex items-center gap-2">
                 <span id="auth-status" class="hidden md:inline text-sm text-gray-600"></span>
                 <button id="auth-btn" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all">Entrar com Google</button>
-                <button onclick="openModal('avaria')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-sm active:scale-95">
+                <button id="btn-nova-avaria" onclick="openModal('avaria')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-sm active:scale-95">
                     <i data-lucide="plus" class="w-5 h-5"></i>
                     <span class="hidden sm:inline">Nova Avaria</span>
                 </button>
