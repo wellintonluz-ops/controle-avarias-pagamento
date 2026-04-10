@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Avarias de Terceiros</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCI9L06BXA4kccf_BxMotwiaqxXX6ziAb4",
+            authDomain: "controle-avarias-pagamentos.firebaseapp.com",
+            projectId: "controle-avarias-pagamentos",
+            storageBucket: "controle-avarias-pagamentos.firebasestorage.app",
+            messagingSenderId: "930955657125",
+            appId: "1:930955657125:web:fda47b92ace366694bf24c",
+            measurementId: "G-JMD0HY2NDZ"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+        const db = getFirestore(app);
+
+        let records = [];
+        let currentUser = null;
+        let activePaymentId = null;
+        let unsubscribeRecords = null;
+
+        // Elementos do DOM
+        const listContainer = document.getElementById('records-list');
+        const modalAvaria = document.getElementById('modal-avaria');
+        const modalPagamento = document.getElementById('modal-pagamento');
+        const imgModal = document.getElementById('modal-imagem');
+        const formAvaria = document.getElementById('avaria-form');
+        const formPagamento = document.getElementById('pagamento-form');
+        const searchInput = document.getElementById('search');
+        const filterStatus = document.getElementById('filter-status');
+        const loadingEl = document.getElementById('loading');
+        const authStatus = document.getElementById('auth-status');
+        const authBtn = document.getElementById('auth-btn');
+        const ALLOWED_DOMAIN = '@grupotbx.com.br';
+
+        function isAllowedEmail(email) {
+            return typeof email === 'string' && email.toLowerCase().endsWith(ALLOWED_DOMAIN);
+        }
+
+        function setLoadingText(text) {
+            loadingEl.innerHTML = `<p class="text-gray-500 text-sm">${text}</p>`;
+            loadingEl.classList.remove('hidden');
+        }
+
+        function setAuthUI() {
+            if (currentUser) {
+                authStatus.textContent = currentUser.displayName || currentUser.email || 'Usuário autenticado';
+                authBtn.textContent = 'Sair';
+                authBtn.className = 'bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all';
+            } else {
+                authStatus.textContent = `Não autenticado (${ALLOWED_DOMAIN})`;
+                authBtn.textContent = `Entrar com Google (${ALLOWED_DOMAIN})`;
+                authBtn.className = 'bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all';
+            }
+        }
+
+        // Comprime e converte imagem para base64 (armazenado no Firestore, plano gratuito)
+        // Aceita qualquer tamanho; redimensiona e comprime até caber no limite do Firestore (~700KB base64)
+        async function toBase64(file) {
+            if (!file || file.size === 0) return '';
+
+            const MAX_BASE64_BYTES = 700 * 1024; // ~525KB imagem real
+            const MAX_DIM = 1600; // largura/altura máxima em px
+
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = reject;
+                reader.onloadend = () => {
+                    const img = new Image();
+                    img.onerror = reject;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let { width, height } = img;
+
+                        // Redimensiona mantendo proporção
+                        if (width > MAX_DIM || height > MAX_DIM) {
+                            const ratio = Math.min(MAX_DIM / width, MAX_DIM / height);
+                            width = Math.round(width * ratio);
+                            height = Math.round(height * ratio);
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+                        // Reduz qualidade até caber no limite
+                        let quality = 0.85;
+                        let result = canvas.toDataURL('image/jpeg', quality);
+                        while (result.length > MAX_BASE64_BYTES && quality > 0.2) {
+                            quality = Math.round((quality - 0.1) * 10) / 10;
+                            result = canvas.toDataURL('image/jpeg', quality);
+                        }
+                        resolve(result);
+                    };
+                    img.src = reader.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function startListening() {
+            if (unsubscribeRecords) unsubscribeRecords();
+            setLoadingText('Carregando registros...');
+
+            const q = query(collection(db, 'avarias'), orderBy('createdAt', 'desc'));
+            unsubscribeRecords = onSnapshot(q, (snapshot) => {
+                records = snapshot.docs.map((snap) => ({ id: snap.id, ...snap.data() }));
+                loadingEl.classList.add('hidden');
+                render();
+            }, (error) => {
+                console.error('Erro ao carregar registros:', error);
+                setLoadingText('Erro ao carregar dados. Verifique regras/permissões.');
+            });
+        }
+
+        // Renderização dos Cards
+        function render() {
+            const searchTerm = searchInput.value.toLowerCase();
+            const statusFilter = filterStatus.value;
+
+            const filtered = records.filter(r => {
+                const matchesSearch = r.terceiro.toLowerCase().includes(searchTerm);
+                const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
+                return matchesSearch && matchesStatus;
+            });
+
+            if (filtered.length === 0) {
+                listContainer.innerHTML = `<div class="col-span-full py-10 text-center text-gray-500">Nenhum registro encontrado.</div>`;
+                return;
+            }
+
+            listContainer.innerHTML = filtered.map(r => `
+                <div class="bg-white rounded-xl shadow-sm border ${r.status === 'pago' ? 'border-green-100' : 'border-gray-100'} overflow-hidden hover:shadow-md transition-shadow">
+                    <div class="p-5">
+                        <div class="flex justify-between items-start mb-3">
+                            <div>
+                                <h3 class="font-bold text-gray-800 text-lg">${r.terceiro}</h3>
+                                <p class="text-sm text-gray-500">${new Date(r.data).toLocaleDateString('pt-BR')}</p>
+                            </div>
+                            <span class="px-3 py-1 rounded-full text-xs font-semibold ${r.status === 'pago' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
+                                ${r.status === 'pago' ? 'PAGO' : 'PENDENTE'}
+                            </span>
+                        </div>
+                        
+                        <div class="space-y-2 mb-4 text-sm text-gray-600">
+                            <p class="flex items-center gap-2">
+                                <i data-lucide="dollar-sign" class="w-4 h-4 text-gray-400"></i>
+                                <span class="font-medium text-gray-900 font-bold text-base">R$ ${parseFloat(r.valor).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</span>
+                            </p>
+                            <p class="line-clamp-2">${r.descricao || 'Sem descrição'}</p>
+                            
+                            ${r.status === 'pago' ? `
+                                <div class="mt-3 p-2 bg-green-50 rounded-lg border border-green-100 text-green-800 text-[11px]">
+                                    <p><strong>Pago em:</strong> ${new Date(r.dataPagamento).toLocaleDateString('pt-BR')}</p>
+                                    <p><strong>Boleto:</strong> ${r.boletoInfo || '-'}</p>
+                                </div>
+                            ` : ''}
+                        </div>
+
+                        <div class="flex flex-wrap gap-2 pt-4 border-t border-gray-50">
+                            <button onclick="window.viewImage('${r.id}', 'foto')" class="flex-1 bg-blue-50 text-blue-600 py-2 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors flex items-center justify-center gap-1">
+                                <i data-lucide="file-text" class="w-4 h-4"></i> Doc. Avaria
+                            </button>
+                            
+                            ${r.status === 'pago' ? `
+                                <button onclick="window.viewImage('${r.id}', 'comprovante')" class="flex-1 bg-green-50 text-green-600 py-2 rounded-lg text-xs font-medium hover:bg-green-100 transition-colors flex items-center justify-center gap-1">
+                                    <i data-lucide="check-square" class="w-4 h-4"></i> Comprovante
+                                </button>
+                            ` : ''}
+
+                            <div class="flex gap-1 w-full sm:w-auto">
+                                <button onclick="window.handleStatusAction('${r.id}', '${r.status}')" class="flex-1 sm:flex-none px-3 ${r.status === 'pago' ? 'bg-gray-100 text-gray-500' : 'bg-green-600 text-white'} py-2 rounded-lg hover:opacity-90 transition-colors flex items-center justify-center">
+                                    <i data-lucide="${r.status === 'pago' ? 'rotate-ccw' : 'check-circle'}" class="w-5 h-5"></i>
+                                </button>
+                                <button onclick="window.deleteRecord('${r.id}')" class="px-3 bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 transition-colors">
+                                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            
+            lucide.createIcons();
+        }
+
+        // Controle de Ações
+        window.handleStatusAction = async (id, currentStatus) => {
+            if (!currentUser) {
+                alert('Faça login com Google para alterar status.');
+                return;
+            }
+
+            if (currentStatus === 'pago') {
+                if (confirm("Deseja reverter o status para Pendente e remover dados do pagamento?")) {
+                    await updateDoc(doc(db, 'avarias', id), {
+                        status: 'pendente',
+                        dataPagamento: null,
+                        boletoInfo: null,
+                        comprovanteUrl: null,
+                        updatedBy: currentUser.email || currentUser.displayName || 'usuario-google',
+                        updatedAt: serverTimestamp()
+                    });
+                }
+            } else {
+                activePaymentId = id;
+                document.getElementById('pagamento-data').value = new Date().toISOString().split('T')[0];
+                modalPagamento.classList.remove('hidden');
+                modalPagamento.classList.add('flex');
+            }
+        };
+
+        window.deleteRecord = async (id) => {
+            if (!currentUser) {
+                alert('Faça login com Google para excluir registros.');
+                return;
+            }
+
+            if (confirm("Tem certeza que deseja excluir este registro permanentemente?")) {
+                await deleteDoc(doc(db, 'avarias', id));
+            }
+        };
+
+        window.viewImage = (id, field) => {
+            const record = records.find(r => r.id === id);
+            const imgSrc = field === 'foto'
+                ? (record.fotoUrl || record.foto)
+                : (record.comprovanteUrl || record.comprovante);
+            if (record && imgSrc) {
+                document.getElementById('img-preview-full').src = imgSrc;
+                imgModal.classList.remove('hidden');
+                imgModal.classList.add('flex');
+            } else {
+                alert("Nenhuma imagem anexada neste campo.");
+            }
+        };
+
+        // UI Feedback - Handlers de Upload
+        window.handleFileSelect = (input, type) => {
+            const prefix = type === 'avaria' ? 'upload' : 'pay';
+            const content = document.getElementById(`${prefix}-content`);
+            const preview = document.getElementById(`${prefix}-preview`);
+            const thumb = document.getElementById(`${prefix}-thumb`);
+            const fileName = document.getElementById(`${prefix}-file-name`);
+            
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    thumb.src = e.target.result;
+                    fileName.innerText = file.name;
+                    content.classList.add('hidden');
+                    preview.classList.remove('hidden');
+                };
+                reader.readAsDataURL(file);
+            }
+        };
+
+        window.resetUploadUI = (prefix) => {
+            document.getElementById(`${prefix}-content`).classList.remove('hidden');
+            document.getElementById(`${prefix}-preview`).classList.add('hidden');
+            document.getElementById(`${prefix}-thumb`).src = "";
+            document.getElementById(`${prefix}-file-name`).innerText = "";
+        };
+
+        // Submissão Avaria
+        formAvaria.onsubmit = async (e) => {
+            e.preventDefault();
+            if (!currentUser) {
+                alert('Faça login com Google para salvar.');
+                return;
+            }
+
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true; btn.innerText = "Salvando...";
+
+            const formData = new FormData(formAvaria);
+            const file = formData.get('foto');
+
+            try {
+                const fotoBase64 = await toBase64(file);
+                const newDoc = doc(collection(db, 'avarias'));
+
+                await setDoc(newDoc, {
+                    terceiro: String(formData.get('terceiro') || '').trim(),
+                    data: formData.get('data'),
+                    valor: Number(formData.get('valor') || 0),
+                    descricao: String(formData.get('descricao') || '').trim(),
+                    status: 'pendente',
+                    fotoUrl: fotoBase64,
+                    comprovanteUrl: null,
+                    dataPagamento: null,
+                    boletoInfo: null,
+                    createdBy: currentUser.email || currentUser.displayName || 'usuario-google',
+                    updatedBy: currentUser.email || currentUser.displayName || 'usuario-google',
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                });
+
+                btn.disabled = false; btn.innerText = "Salvar Registro";
+                window.closeModal('avaria');
+            } catch (error) {
+                console.error('Erro ao salvar avaria:', error);
+                alert(error.message || 'Erro ao salvar registro.');
+                btn.disabled = false; btn.innerText = "Salvar Registro";
+            }
+        };
+
+        // Submissão Pagamento
+        formPagamento.onsubmit = async (e) => {
+            e.preventDefault();
+            if (!currentUser) {
+                alert('Faça login com Google para confirmar pagamento.');
+                return;
+            }
+
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true; btn.innerText = "Confirmando...";
+
+            const formData = new FormData(formPagamento);
+            const file = formData.get('comprovante');
+
+            try {
+                const current = records.find(r => r.id === activePaymentId);
+                let comprovanteUrl = current?.comprovanteUrl || null;
+
+                if (file && file.size > 0) {
+                    comprovanteUrl = await toBase64(file);
+                }
+
+                await updateDoc(doc(db, 'avarias', activePaymentId), {
+                    status: 'pago',
+                    dataPagamento: formData.get('dataPagamento'),
+                    boletoInfo: String(formData.get('boletoInfo') || '').trim(),
+                    comprovanteUrl,
+                    updatedBy: currentUser.email || currentUser.displayName || 'usuario-google',
+                    updatedAt: serverTimestamp()
+                });
+
+                btn.disabled = false; btn.innerText = "Confirmar Pagamento";
+                window.closeModal('pagamento');
+            } catch (error) {
+                console.error('Erro ao confirmar pagamento:', error);
+                alert(error.message || 'Erro ao confirmar pagamento.');
+                btn.disabled = false; btn.innerText = "Confirmar Pagamento";
+            }
+        };
+
+        // Modais
+        window.openModal = (type) => {
+            if (!currentUser) {
+                alert('Entre com Google antes de cadastrar.');
+                return;
+            }
+            document.getElementById(`modal-${type}`).classList.replace('hidden', 'flex');
+        };
+        window.closeModal = (type) => {
+            const m = document.getElementById(`modal-${type}`);
+            m.classList.replace('flex', 'hidden');
+            if(type === 'avaria') { formAvaria.reset(); resetUploadUI('upload'); }
+            if(type === 'pagamento') { formPagamento.reset(); resetUploadUI('pay'); }
+        };
+        window.closeImgModal = () => imgModal.classList.replace('flex', 'hidden');
+
+        searchInput.oninput = render;
+        filterStatus.onchange = render;
+
+        authBtn.onclick = async () => {
+            try {
+                if (currentUser) {
+                    await signOut(auth);
+                } else {
+                    await signInWithPopup(auth, provider);
+                }
+            } catch (error) {
+                console.error('Erro de autenticação:', error);
+                alert('Falha ao autenticar com Google.');
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user && !isAllowedEmail(user.email || '')) {
+                alert('Acesso permitido apenas para contas @grupotbx.com.br.');
+                signOut(auth);
+                return;
+            }
+
+            currentUser = user;
+            setAuthUI();
+
+            if (user) {
+                startListening();
+            } else {
+                if (unsubscribeRecords) unsubscribeRecords();
+                records = [];
+                loadingEl.classList.add('hidden');
+                render();
+            }
+        });
+
+        window.onload = () => { setAuthUI(); lucide.createIcons(); };
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-900 pb-10">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="bg-blue-600 p-2 rounded-lg">
+                    <i data-lucide="shield-alert" class="w-6 h-6 text-white"></i>
+                </div>
+                <h1 class="text-xl font-bold tracking-tight">Gestão de Avarias</h1>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="auth-status" class="hidden md:inline text-sm text-gray-600"></span>
+                <button id="auth-btn" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg font-semibold text-sm transition-all">Entrar com Google</button>
+                <button onclick="openModal('avaria')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-sm active:scale-95">
+                    <i data-lucide="plus" class="w-5 h-5"></i>
+                    <span class="hidden sm:inline">Nova Avaria</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main -->
+    <main class="max-w-7xl mx-auto px-4 py-6">
+        <!-- Filtros -->
+        <div class="flex flex-col sm:flex-row gap-4 mb-8 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+            <div class="relative flex-1">
+                <i data-lucide="search" class="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                <input type="text" id="search" placeholder="Buscar por nome do terceiro..." class="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+            </div>
+            <div class="w-full sm:w-48">
+                <select id="filter-status" class="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white">
+                    <option value="all">Todos Status</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="pago">Pagos</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="loading" class="flex flex-col items-center justify-center py-20">
+            <div class="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+
+        <div id="records-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+    </main>
+
+    <!-- Modal Nova Avaria -->
+    <div id="modal-avaria" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+            <div class="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <h2 class="text-xl font-bold text-gray-800">Registrar Avaria</h2>
+                <button onclick="closeModal('avaria')" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <form id="avaria-form" class="p-6 space-y-4">
+                <input type="text" name="terceiro" required class="w-full px-4 py-2 border border-gray-200 rounded-lg" placeholder="Nome do Terceiro">
+                <div class="grid grid-cols-2 gap-4">
+                    <input type="date" name="data" required class="w-full px-4 py-2 border border-gray-200 rounded-lg">
+                    <input type="number" step="0.01" name="valor" required class="w-full px-4 py-2 border border-gray-200 rounded-lg" placeholder="Valor R$">
+                </div>
+                <textarea name="descricao" rows="2" class="w-full px-4 py-2 border border-gray-200 rounded-lg" placeholder="Descrição da avaria / Placa"></textarea>
+                
+                <div class="relative border-2 border-dashed border-gray-200 rounded-lg p-4 text-center cursor-pointer min-h-[100px] flex items-center justify-center">
+                    <input type="file" name="foto" accept="image/*" capture="environment" onchange="window.handleFileSelect(this, 'avaria')" class="absolute inset-0 opacity-0 cursor-pointer z-10">
+                    <div id="upload-content"><i data-lucide="camera" class="w-8 h-8 mx-auto text-gray-400 mb-1"></i><p class="text-xs text-gray-500">Foto do Documento Assinado</p></div>
+                    <div id="upload-preview" class="hidden flex items-center gap-3">
+                        <img id="upload-thumb" class="w-12 h-12 object-cover rounded shadow-sm">
+                        <p id="upload-file-name" class="text-xs font-bold text-green-600 truncate max-w-[150px]"></p>
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100">Salvar Registro</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Pagamento (Novo!) -->
+    <div id="modal-pagamento" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+            <div class="p-6 border-b border-green-100 flex justify-between items-center bg-green-50">
+                <h2 class="text-xl font-bold text-green-800">Confirmar Pagamento</h2>
+                <button onclick="closeModal('pagamento')" class="text-green-600"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <form id="pagamento-form" class="p-6 space-y-4">
+                <div class="space-y-1">
+                    <label class="text-xs font-bold text-gray-500 uppercase">Data do Recebimento</label>
+                    <input type="date" id="pagamento-data" name="dataPagamento" required class="w-full px-4 py-2 border border-gray-200 rounded-lg">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-xs font-bold text-gray-500 uppercase">Info do Boleto / Ref.</label>
+                    <input type="text" name="boletoInfo" class="w-full px-4 py-2 border border-gray-200 rounded-lg" placeholder="Nº do boleto ou código da transação">
+                </div>
+                
+                <div class="relative border-2 border-dashed border-green-200 bg-green-50/30 rounded-lg p-4 text-center cursor-pointer min-h-[100px] flex items-center justify-center">
+                    <input type="file" name="comprovante" accept="image/*" capture="environment" onchange="window.handleFileSelect(this, 'pagamento')" class="absolute inset-0 opacity-0 cursor-pointer z-10">
+                    <div id="pay-content"><i data-lucide="file-check" class="w-8 h-8 mx-auto text-green-400 mb-1"></i><p class="text-xs text-green-700 font-medium">Anexar Comprovante</p></div>
+                    <div id="pay-preview" class="hidden flex items-center gap-3">
+                        <img id="pay-thumb" class="w-12 h-12 object-cover rounded shadow-sm border border-green-200">
+                        <p id="pay-file-name" class="text-xs font-bold text-green-600 truncate max-w-[150px]"></p>
+                    </div>
+                </div>
+                
+                <button type="submit" class="w-full bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-green-100">Confirmar Pagamento</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Visualizador de Imagens -->
+    <div id="modal-imagem" class="fixed inset-0 bg-black/95 z-50 hidden flex-col items-center justify-center p-4">
+        <button onclick="closeImgModal()" class="absolute top-6 right-6 text-white bg-white/10 p-2 rounded-full hover:bg-white/20"><i data-lucide="x" class="w-8 h-8"></i></button>
+        <img id="img-preview-full" class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl">
+    </div>
+
+</body>
+</html>
