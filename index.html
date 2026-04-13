@@ -79,6 +79,23 @@
             }
         }
 
+        function formatDateBR(dateString) {
+            if (!dateString) return '-';
+            const parts = String(dateString).split('-');
+            if (parts.length === 3) {
+                const [year, month, day] = parts;
+                return `${day}/${month}/${year}`;
+            }
+            const parsed = new Date(dateString);
+            return Number.isNaN(parsed.getTime()) ? String(dateString) : parsed.toLocaleDateString('pt-BR');
+        }
+
+        function getLocalDateInputValue() {
+            const now = new Date();
+            const timezoneOffset = now.getTimezoneOffset() * 60000;
+            return new Date(now.getTime() - timezoneOffset).toISOString().slice(0, 10);
+        }
+
         // Comprime e converte imagem para base64 (armazenado no Firestore, plano gratuito)
         // Aceita qualquer tamanho; redimensiona e comprime até caber no limite do Firestore (~700KB base64)
         async function toBase64(file) {
@@ -159,7 +176,7 @@
                         <div class="flex justify-between items-start mb-3">
                             <div>
                                 <h3 class="font-bold text-gray-800 text-lg">${r.terceiro}</h3>
-                                <p class="text-sm text-gray-500">${new Date(r.data).toLocaleDateString('pt-BR')}</p>
+                                <p class="text-sm text-gray-500">${formatDateBR(r.data)}</p>
                             </div>
                             <span class="px-3 py-1 rounded-full text-xs font-semibold ${r.status === 'pago' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}">
                                 ${r.status === 'pago' ? 'PAGO' : 'PENDENTE'}
@@ -175,7 +192,7 @@
                             
                             ${r.status === 'pago' ? `
                                 <div class="mt-3 p-2 bg-green-50 rounded-lg border border-green-100 text-green-800 text-[11px]">
-                                    <p><strong>Pago em:</strong> ${new Date(r.dataPagamento).toLocaleDateString('pt-BR')}</p>
+                                    <p><strong>Pago em:</strong> ${formatDateBR(r.dataPagamento)}</p>
                                     <p><strong>Boleto:</strong> ${r.boletoInfo || '-'}</p>
                                 </div>
                             ` : ''}
@@ -230,7 +247,7 @@
                 }
             } else {
                 activePaymentId = id;
-                document.getElementById('pagamento-data').value = new Date().toISOString().split('T')[0];
+                document.getElementById('pagamento-data').value = getLocalDateInputValue();
                 modalPagamento.classList.remove('hidden');
                 modalPagamento.classList.add('flex');
             }
