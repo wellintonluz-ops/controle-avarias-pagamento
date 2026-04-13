@@ -29,6 +29,7 @@
         let records = [];
         let currentUser = null;
         let activePaymentId = null;
+        let editingRecordId = null;
         let unsubscribeRecords = null;
 
         // Elementos do DOM
@@ -43,6 +44,8 @@
         const loadingEl = document.getElementById('loading');
         const authStatus = document.getElementById('auth-status');
         const authBtn = document.getElementById('auth-btn');
+        const avariaModalTitle = document.getElementById('avaria-modal-title');
+        const avariaSubmitBtn = document.getElementById('avaria-submit-btn');
         const ALLOWED_DOMAIN = '@grupotbx.com.br';
         const ADMIN_EMAILS = new Set([
             'wellinton.luz@grupotbx.com.br',
@@ -94,6 +97,18 @@
             const now = new Date();
             const timezoneOffset = now.getTimezoneOffset() * 60000;
             return new Date(now.getTime() - timezoneOffset).toISOString().slice(0, 10);
+        }
+
+        function setUploadPreview(prefix, imageSrc, fileLabel) {
+            document.getElementById(`${prefix}-thumb`).src = imageSrc || '';
+            document.getElementById(`${prefix}-file-name`).innerText = fileLabel || '';
+            document.getElementById(`${prefix}-content`).classList.add('hidden');
+            document.getElementById(`${prefix}-preview`).classList.remove('hidden');
+        }
+
+        function setAvariaFormMode(isEditing) {
+            avariaModalTitle.textContent = isEditing ? 'Editar Avaria' : 'Registrar Avaria';
+            avariaSubmitBtn.textContent = isEditing ? 'Salvar Alteracoes' : 'Salvar Registro';
         }
 
         // Comprime e converte imagem para base64 (armazenado no Firestore, plano gratuito)
@@ -211,6 +226,9 @@
 
                             ${isAdmin() ? `
                             <div class="flex gap-1 w-full sm:w-auto">
+                                <button onclick="window.openEditModal('${r.id}')" class="px-3 bg-amber-50 text-amber-600 py-2 rounded-lg hover:bg-amber-100 transition-colors">
+                                    <i data-lucide="pencil" class="w-5 h-5"></i>
+                                </button>
                                 <button onclick="window.handleStatusAction('${r.id}', '${r.status}')" class="flex-1 sm:flex-none px-3 ${r.status === 'pago' ? 'bg-gray-100 text-gray-500' : 'bg-green-600 text-white'} py-2 rounded-lg hover:opacity-90 transition-colors flex items-center justify-center">
                                     <i data-lucide="${r.status === 'pago' ? 'rotate-ccw' : 'check-circle'}" class="w-5 h-5"></i>
                                 </button>
@@ -278,6 +296,36 @@
             }
         };
 
+        window.openEditModal = (id) => {
+            if (!isAdmin()) {
+                alert('Apenas administradores podem editar registros.');
+                return;
+            }
+
+            const record = records.find(r => r.id === id);
+            if (!record) {
+                alert('Registro nao encontrado.');
+                return;
+            }
+
+            editingRecordId = id;
+            formAvaria.elements['terceiro'].value = record.terceiro || '';
+            formAvaria.elements['data'].value = record.data || '';
+            formAvaria.elements['valor'].value = record.valor || '';
+            formAvaria.elements['descricao'].value = record.descricao || '';
+            formAvaria.elements['foto'].value = '';
+            setAvariaFormMode(true);
+
+            if (record.fotoUrl) {
+                setUploadPreview('upload', record.fotoUrl, 'Imagem atual');
+            } else {
+                resetUploadUI('upload');
+            }
+
+            modalAvaria.classList.remove('hidden');
+            modalAvaria.classList.add('flex');
+        };
+
         // UI Feedback - Handlers de Upload
         window.handleFileSelect = (input, type) => {
             const prefix = type === 'avaria' ? 'upload' : 'pay';
@@ -315,37 +363,48 @@
             }
 
             const btn = e.target.querySelector('button[type="submit"]');
+            const defaultLabel = editingRecordId ? 'Salvar Alteracoes' : 'Salvar Registro';
             btn.disabled = true; btn.innerText = "Salvando...";
 
             const formData = new FormData(formAvaria);
             const file = formData.get('foto');
 
             try {
-                const fotoBase64 = await toBase64(file);
-                const newDoc = doc(collection(db, 'avarias'));
-
-                await setDoc(newDoc, {
+                const payload = {
                     terceiro: String(formData.get('terceiro') || '').trim(),
                     data: formData.get('data'),
                     valor: Number(formData.get('valor') || 0),
                     descricao: String(formData.get('descricao') || '').trim(),
-                    status: 'pendente',
-                    fotoUrl: fotoBase64,
-                    comprovanteUrl: null,
-                    dataPagamento: null,
-                    boletoInfo: null,
-                    createdBy: currentUser.email || currentUser.displayName || 'usuario-google',
                     updatedBy: currentUser.email || currentUser.displayName || 'usuario-google',
-                    createdAt: serverTimestamp(),
                     updatedAt: serverTimestamp()
-                });
+                };
 
-                btn.disabled = false; btn.innerText = "Salvar Registro";
+                if (editingRecordId) {
+                    const currentRecord = records.find(r => r.id === editingRecordId);
+                    payload.fotoUrl = (file && file.size > 0)
+                        ? await toBase64(file)
+                        : (currentRecord?.fotoUrl || null);
+
+                    await updateDoc(doc(db, 'avarias', editingRecordId), payload);
+                } else {
+                    payload.status = 'pendente';
+                    payload.fotoUrl = await toBase64(file);
+                    payload.comprovanteUrl = null;
+                    payload.dataPagamento = null;
+                    payload.boletoInfo = null;
+                    payload.createdBy = currentUser.email || currentUser.displayName || 'usuario-google';
+                    payload.createdAt = serverTimestamp();
+
+                    const newDoc = doc(collection(db, 'avarias'));
+                    await setDoc(newDoc, payload);
+                }
+
+                btn.disabled = false; btn.innerText = defaultLabel;
                 window.closeModal('avaria');
             } catch (error) {
                 console.error('Erro ao salvar avaria:', error);
                 alert(error.message || 'Erro ao salvar registro.');
-                btn.disabled = false; btn.innerText = "Salvar Registro";
+                btn.disabled = false; btn.innerText = defaultLabel;
             }
         };
 
@@ -395,12 +454,22 @@
                 alert('Apenas administradores podem cadastrar.');
                 return;
             }
+            if (type === 'avaria') {
+                editingRecordId = null;
+                setAvariaFormMode(false);
+                resetUploadUI('upload');
+            }
             document.getElementById(`modal-${type}`).classList.replace('hidden', 'flex');
         };
         window.closeModal = (type) => {
             const m = document.getElementById(`modal-${type}`);
             m.classList.replace('flex', 'hidden');
-            if(type === 'avaria') { formAvaria.reset(); resetUploadUI('upload'); }
+            if(type === 'avaria') {
+                editingRecordId = null;
+                formAvaria.reset();
+                setAvariaFormMode(false);
+                resetUploadUI('upload');
+            }
             if(type === 'pagamento') { formPagamento.reset(); resetUploadUI('pay'); }
         };
         window.closeImgModal = () => imgModal.classList.replace('flex', 'hidden');
@@ -498,7 +567,7 @@
     <div id="modal-avaria" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center p-4 backdrop-blur-sm">
         <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
             <div class="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                <h2 class="text-xl font-bold text-gray-800">Registrar Avaria</h2>
+                <h2 id="avaria-modal-title" class="text-xl font-bold text-gray-800">Registrar Avaria</h2>
                 <button onclick="closeModal('avaria')" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-6 h-6"></i></button>
             </div>
             <form id="avaria-form" class="p-6 space-y-4">
@@ -517,7 +586,7 @@
                         <p id="upload-file-name" class="text-xs font-bold text-green-600 truncate max-w-[150px]"></p>
                     </div>
                 </div>
-                <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100">Salvar Registro</button>
+                <button id="avaria-submit-btn" type="submit" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100">Salvar Registro</button>
             </form>
         </div>
     </div>
