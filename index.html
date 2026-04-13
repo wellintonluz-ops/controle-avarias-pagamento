@@ -40,17 +40,21 @@
         const formAvaria = document.getElementById('avaria-form');
         const formPagamento = document.getElementById('pagamento-form');
         const searchInput = document.getElementById('search');
-        const filterStatus = document.getElementById('filter-status');
         const loadingEl = document.getElementById('loading');
         const authStatus = document.getElementById('auth-status');
         const authBtn = document.getElementById('auth-btn');
         const avariaModalTitle = document.getElementById('avaria-modal-title');
         const avariaSubmitBtn = document.getElementById('avaria-submit-btn');
+        const tabPendentes = document.getElementById('tab-pendentes');
+        const tabPagos = document.getElementById('tab-pagos');
+        const countPendentes = document.getElementById('count-pendentes');
+        const countPagos = document.getElementById('count-pagos');
         const ALLOWED_DOMAIN = '@grupotbx.com.br';
         const ADMIN_EMAILS = new Set([
             'wellinton.luz@grupotbx.com.br',
             'sara.silva@grupotbx.com.br'
         ]);
+        let activeTab = 'pendente';
 
         function isAllowedEmail(email) {
             return typeof email === 'string' && email.toLowerCase().endsWith(ALLOWED_DOMAIN);
@@ -109,6 +113,22 @@
         function setAvariaFormMode(isEditing) {
             avariaModalTitle.textContent = isEditing ? 'Editar Avaria' : 'Registrar Avaria';
             avariaSubmitBtn.textContent = isEditing ? 'Salvar Alteracoes' : 'Salvar Registro';
+        }
+
+        function updateTabs() {
+            const totalPendentes = records.filter(r => r.status !== 'pago').length;
+            const totalPagos = records.filter(r => r.status === 'pago').length;
+
+            countPendentes.textContent = totalPendentes;
+            countPagos.textContent = totalPagos;
+
+            const isPendentes = activeTab === 'pendente';
+            tabPendentes.className = isPendentes
+                ? 'flex-1 sm:flex-none px-4 py-2 rounded-lg bg-amber-100 text-amber-800 font-semibold text-sm transition-all'
+                : 'flex-1 sm:flex-none px-4 py-2 rounded-lg bg-white text-gray-600 font-semibold text-sm border border-gray-200 hover:bg-gray-50 transition-all';
+            tabPagos.className = !isPendentes
+                ? 'flex-1 sm:flex-none px-4 py-2 rounded-lg bg-green-100 text-green-800 font-semibold text-sm transition-all'
+                : 'flex-1 sm:flex-none px-4 py-2 rounded-lg bg-white text-gray-600 font-semibold text-sm border border-gray-200 hover:bg-gray-50 transition-all';
         }
 
         // Comprime e converte imagem para base64 (armazenado no Firestore, plano gratuito)
@@ -172,11 +192,12 @@
         // Renderização dos Cards
         function render() {
             const searchTerm = searchInput.value.toLowerCase();
-            const statusFilter = filterStatus.value;
+            updateTabs();
 
             const filtered = records.filter(r => {
                 const matchesSearch = r.terceiro.toLowerCase().includes(searchTerm);
-                const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
+                const recordStatus = r.status === 'pago' ? 'pago' : 'pendente';
+                const matchesStatus = recordStatus === activeTab;
                 return matchesSearch && matchesStatus;
             });
 
@@ -475,7 +496,14 @@
         window.closeImgModal = () => imgModal.classList.replace('flex', 'hidden');
 
         searchInput.oninput = render;
-        filterStatus.onchange = render;
+        tabPendentes.onclick = () => {
+            activeTab = 'pendente';
+            render();
+        };
+        tabPagos.onclick = () => {
+            activeTab = 'pago';
+            render();
+        };
 
         authBtn.onclick = async () => {
             try {
@@ -547,12 +575,13 @@
                 <i data-lucide="search" class="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
                 <input type="text" id="search" placeholder="Buscar por nome do terceiro..." class="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
             </div>
-            <div class="w-full sm:w-48">
-                <select id="filter-status" class="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white">
-                    <option value="all">Todos Status</option>
-                    <option value="pendente">Pendentes</option>
-                    <option value="pago">Pagos</option>
-                </select>
+            <div class="w-full sm:w-auto flex gap-2">
+                <button id="tab-pendentes" class="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-amber-100 text-amber-800 font-semibold text-sm transition-all">
+                    Pendentes <span id="count-pendentes" class="ml-1">0</span>
+                </button>
+                <button id="tab-pagos" class="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-white text-gray-600 font-semibold text-sm border border-gray-200 hover:bg-gray-50 transition-all">
+                    Pagos <span id="count-pagos" class="ml-1">0</span>
+                </button>
             </div>
         </div>
 
