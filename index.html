@@ -25,7 +25,6 @@
         const auth = getAuth(app);
         const provider = new GoogleAuthProvider();
         const db = getFirestore(app);
-
         let records = [];
         let currentUser = null;
         let activePaymentId = null;
@@ -551,7 +550,11 @@
     <header class="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
         <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
             <div class="flex items-center gap-3 min-w-0">
-                <img src="tbx-logo.svg" alt="Grupo TBX" class="h-7 sm:h-8 md:h-9 w-auto shrink-0">
+                <svg viewBox="0 0 1080 180" role="img" aria-label="Grupo TBX" class="h-7 sm:h-8 md:h-9 w-auto shrink-0">
+                    <text x="10" y="122" fill="#203b59" font-size="102" font-weight="500" font-family="Segoe UI, Arial, sans-serif" letter-spacing="16">GRUPO</text>
+                    <rect x="515" y="18" width="12" height="144" fill="#cf1f2e"></rect>
+                    <text x="590" y="136" fill="#203b59" font-size="172" font-weight="800" font-family="Segoe UI, Arial, sans-serif" letter-spacing="1">TBX</text>
+                </svg>
                 <div class="min-w-0">
                     <h1 class="text-xl font-bold tracking-tight text-gray-900">Gestão de Avarias</h1>
                 </div>
